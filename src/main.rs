@@ -6,7 +6,6 @@ use std::io::BufReader;
 use std::fs::File;
 use std::collections::VecDeque;
 use rodio::{Decoder, OutputStream, Sink};
-use gpiod::{Chip, Options, Masked, AsValuesMut};
 
 pub mod fourbyfour;
 pub mod rotary;
@@ -63,6 +62,7 @@ struct SystemState {
     queue            : VecDeque<usize>, // for playlists, just dump them into queue. Easy!
     keypad           : FourByFour,
     old_keypad_state : FourByFourState,
+    volume           : RotaryEncoder,
     numstate         : usize, // we typin' numbers if this is nonzero
     paused           : bool
 }
@@ -70,9 +70,9 @@ struct SystemState {
 
 impl SystemState {
     fn update(&mut self) -> bool { // returns whether to continue or not, allowing it to do things like interrupt playback upon user input.
-        std::thread::sleep(std::time::Duration::from_millis(100)); // pause 0.1s for the kernel to do other stuff
-        // this also prevents static with frequency <100ms from triggering button presses (most static is probably closer to the 10ms range,
-        // so it covers quite a lot); because button presses are almost always >100ms, this shouldn't affect user experience.
+        std::thread::sleep(std::time::Duration::from_millis(2)); // pause 1ms for the kernel to do other stuff
+        // this also prevents static with frequency <1ms from triggering button presses (most static is probably closer to the 10ms range,
+        // so it covers quite a lot); because button presses are almost always >1ms, this shouldn't affect user experience.
         let buttons = self.keypad.read_pad();
         let dif = self.old_keypad_state.aint(buttons);
         self.old_keypad_state = buttons;
@@ -108,6 +108,10 @@ impl SystemState {
                 return false; // just straight up skip
             }
         }
+        self.volume.poll();
+        if self.volume.was_pressed() {
+            println!("Ze button wuz prezzed");
+        }
         true
     }
 
@@ -128,6 +132,10 @@ impl SystemState {
         }
         self.list[self.ptr].source.clone()
     }
+
+    fn get_volume(&mut self) -> f32 {
+        self.volume.map(0, 20, 1.0, 0.0)
+    }
 }
 
 
@@ -143,6 +151,7 @@ fn main() {
         queue            : VecDeque::new(),
         keypad           : FourByFour::new([5, 6, 13, 19], [12, 16, 20, 21]), // GPIO pins based on the diagram at https://simonprickett.dev/raspberry-pi-coding-with-rust-traffic-lights/
         old_keypad_state : FourByFourState::empty(),
+        volume           : RotaryEncoder::new(2, 3, 4),
         numstate         : 0,
         paused           : true
     };
@@ -160,6 +169,8 @@ fn main() {
                     player.pause();
                 }
                 else {
+                    //println!("Volume: {}", state.get_volume());
+                    player.set_volume(state.get_volume());
                     player.play();
                 }
             }
