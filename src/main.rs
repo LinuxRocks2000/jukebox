@@ -1,7 +1,6 @@
 use std::fs;
 use std::error::Error;
 use std::path::PathBuf;
-use serde::{Serialize, Deserialize};
 use std::io::BufReader;
 use std::fs::File;
 use std::collections::VecDeque;
@@ -9,17 +8,12 @@ use rodio::{Decoder, OutputStream, Sink};
 
 pub mod fourbyfour;
 pub mod rotary;
+pub mod packlistreader;
 
 use fourbyfour::{ FourByFour, FourByFourState };
 use rotary::RotaryEncoder;
-
-
-#[derive(Serialize, Deserialize, Debug)]
-struct PackListEntry {
-    name : String,
-    source : String,
-    album : Option<String>
-}
+use packlistreader::SimplePackList;
+use packlistreader::PackListReader;
 
 
 fn get_songs_dir() -> Result<PathBuf, Box<dyn Error>> {
@@ -56,8 +50,8 @@ fn get_songs_dir() -> Result<PathBuf, Box<dyn Error>> {
 }
 
 
-struct SystemState {
-    list             : Vec<PackListEntry>,
+struct SystemState<PackListProcessor : PackListReader> {
+    list             : PackListProcessor,
     ptr              : usize,
     queue            : VecDeque<usize>, // for playlists, just dump them into queue. Easy!
     keypad           : FourByFour,
@@ -68,7 +62,7 @@ struct SystemState {
 }
 
 
-impl SystemState {
+impl<PackListProcessor: PackListReader> SystemState<PackListProcessor> {
     fn update(&mut self) -> bool { // returns whether to continue or not, allowing it to do things like interrupt playback upon user input.
         std::thread::sleep(std::time::Duration::from_millis(2)); // pause 1ms for the kernel to do other stuff
         // this also prevents static with frequency <1ms from triggering button presses (most static is probably closer to the 10ms range,
@@ -117,7 +111,7 @@ impl SystemState {
 
     fn pick(&mut self) -> String { // return the filename of a song
         if let Some(pointer) = self.queue.pop_front() {
-            println!("Popped {} off of queue to play NOW (the name is '{}')", pointer, self.list[pointer].name);
+            println!("Popped {} off of queue to play NOW (the name is '{}')", pointer, self.list.get(pointer).unwrap().name);
             self.ptr = pointer;
         }
         else {
@@ -130,7 +124,7 @@ impl SystemState {
                 }
             }
         }
-        self.list[self.ptr].source.clone()
+        self.list.get(self.ptr).unwrap().source.clone()
     }
 
     fn get_volume(&mut self) -> f32 {
@@ -143,10 +137,9 @@ fn main() {
     let mut songdir = get_songs_dir().unwrap(); // TODO: inotify on the ~/Music directory to catch updates (fallback to default when a mounted media source unplugs,
     // for instance) to make THAT work, we'll need to set up udev rules; add a wizard to this application that sets udev rules later.
     let mut packlist_loc = songdir.clone();
-    packlist_loc.push("packlist.json");
-    let mut packlist_reader = BufReader::new(File::open(packlist_loc).unwrap());
+    packlist_loc.push("packlist");
     let mut state = SystemState {
-        list             : serde_json::from_reader(packlist_reader).unwrap(),
+        list             : SimplePackList::new(packlist_loc),
         ptr              : 0,
         queue            : VecDeque::new(),
         keypad           : FourByFour::new([5, 6, 13, 19], [12, 16, 20, 21]), // GPIO pins based on the diagram at https://simonprickett.dev/raspberry-pi-coding-with-rust-traffic-lights/
@@ -174,14 +167,13 @@ fn main() {
                     player.play();
                 }
             }
-            let new_song_dir = get_songs_dir().unwrap();
-            if new_song_dir != songdir {
-                songdir = new_song_dir;
-                packlist_loc = songdir.clone();
-                packlist_loc.push("packlist.json");
-                packlist_reader = BufReader::new(File::open(packlist_loc).unwrap());
-                state.list = serde_json::from_reader(packlist_reader).unwrap();
-            }
+        }
+        let new_song_dir = get_songs_dir().unwrap();
+        if new_song_dir != songdir {
+            songdir = new_song_dir;
+            packlist_loc = songdir.clone();
+            packlist_loc.push("packlist.json");
+            state.list = SimplePackList::new(packlist_loc);
         }
     }
 }

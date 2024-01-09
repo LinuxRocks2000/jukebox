@@ -8,10 +8,7 @@ edition = "2021"
 [dependencies]
 rodio = "*"
 shellexpand = "*"
-serde_json = "*"
-serde = { version = "*", features = ["derive"] }
 rand = "*"
 gpio = "*"
 gpiod = "0.2.3"
-[build-dependencies]
-cc = "*"
+seek_bufread = "*"
